@@ -1,169 +1,290 @@
 const express = require("express");
+const { Pool } = require("pg");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const app = express();
-
 const PORT = process.env.PORT || 3000;
 
-// Allows the API to read JSON sent by Android
 app.use(express.json());
 
-const users = [
-  {
-    LastName: "Solon",
-    FirstName: "Lucas",
-    Email: "Lucas@email.com",
-    Password: "12345"
-  },
-  {
-    LastName: "name",
-    FirstName: "namename",
-    Email: "name@email.com",
-    Password: "nameemail1"
-  },
-  {
-    LastName: "email",
-    FirstName: "lastemail",
-    Email: "email@name.com",
-    Password: "2444123"
-  }
-];
+// PostgreSQL connection
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL
+});
 
-// Stores OTPs temporarily
+// Keep Render OTP system for future activities
 const otpStore = new Map();
 
-
-// ===============================
 // HOME
-// ===============================
-
 app.get("/", (req, res) => {
-  res.send("Users API is running!");
+    res.send("Users API is running!");
 });
 
+// GET USERS (without passwords)
+app.get("/users", async (req, res) => {
+    try {
+        const result = await pool.query(
+            "SELECT id, full_name, email, username FROM users ORDER BY id"
+        );
 
-// ===============================
-// USERS
-// ===============================
-
-app.get("/users", (req, res) => {
-  res.json(users);
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Database error"
+        });
+    }
 });
 
+// SIGN UP
+app.post("/signup", async (req, res) => {
+    try {
+        const { fullName, email, username, password } = req.body;
 
-// ===============================
-// REQUEST OTP
-// ===============================
+        if (
+            typeof fullName !== "string" ||
+            typeof email !== "string" ||
+            typeof username !== "string" ||
+            typeof password !== "string"
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "All fields are required"
+            });
+        }
 
-app.post("/otp/request", (req, res) => {
+        const name = fullName.trim();
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedUsername = username.trim();
 
-  const { email } = req.body;
+        if (!name || !normalizedEmail || !normalizedUsername) {
+            return res.status(400).json({
+                success: false,
+                message: "All fields are required"
+            });
+        }
 
-  if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: "Email is required"
-    });
-  }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid email address"
+            });
+        }
 
-  // Check if email exists
-  const user = users.find(
-    u => u.Email.toLowerCase() === email.toLowerCase()
-  );
+        if (password.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: "Password must be at least 6 characters"
+            });
+        }
 
-  if (!user) {
-    return res.status(404).json({
-      success: false,
-      message: "User not found"
-    });
-  }
+        const hashedPassword = await bcrypt.hash(password, 10);
 
-  // Generate random 4-digit OTP
-  const otp = Math.floor(1000 + Math.random() * 9000).toString();
+        await pool.query(
+            `INSERT INTO users
+             (full_name, email, username, password_hash)
+             VALUES ($1, $2, $3, $4)`,
+            [name, normalizedEmail, normalizedUsername, hashedPassword]
+        );
 
-  // OTP expires after 30 seconds
-  const expiresAt = Date.now() + 30000;
+        res.status(201).json({
+            success: true,
+            message: "Account created successfully!"
+        });
 
-  // Save OTP
-  otpStore.set(email.toLowerCase(), {
-    otp: otp,
-    expiresAt: expiresAt
-  });
+    } catch (error) {
+        if (error.code === "23505") {
+            return res.status(409).json({
+                success: false,
+                message: "Email or username already exists"
+            });
+        }
 
-  // OTP appears ONLY in Render logs
-  console.log("--------------------------------");
-  console.log(`OTP for ${email}: ${otp}`);
-  console.log("OTP expires in 30 seconds");
-  console.log("--------------------------------");
+        console.error("Signup error:", error.message);
 
-  res.json({
-    success: true,
-    message: "OTP generated",
-    expiresIn: 30
-  });
+        res.status(500).json({
+            success: false,
+            message: "Unable to create account"
+        });
+    }
 });
 
+// LOGIN
+app.post("/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
 
-// ===============================
-// VERIFY OTP
-// ===============================
+        if (typeof email !== "string" ||
+            typeof password !== "string") {
+            return res.status(400).json({
+                success: false,
+                message: "Email and password are required"
+            });
+        }
+
+        const result = await pool.query(
+            "SELECT * FROM users WHERE email = $1",
+            [email.trim().toLowerCase()]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid email or password"
+            });
+        }
+
+        const user = result.rows[0];
+
+        const validPassword = await bcrypt.compare(
+            password,
+            user.password_hash
+        );
+
+        if (!validPassword) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid email or password"
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Login successful!",
+            email: user.email,
+            fullName: user.full_name
+        });
+
+    } catch (error) {
+        console.error("Login error:", error.message);
+
+        res.status(500).json({
+            success: false,
+            message: "Server error"
+        });
+    }
+});
+
+// RENDER OTP - RESERVED FOR FUTURE ACTIVITY
+app.post("/otp/request", async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (typeof email !== "string" || !email.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "Email is required"
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const result = await pool.query(
+            "SELECT id FROM users WHERE email = $1",
+            [normalizedEmail]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        const otp = crypto.randomInt(1000, 10000).toString();
+
+        otpStore.set(normalizedEmail, {
+            otp,
+            expiresAt: Date.now() + 30000
+        });
+
+        console.log(`OTP for ${normalizedEmail}: ${otp}`);
+
+        res.json({
+            success: true,
+            message: "OTP generated",
+            expiresIn: 30
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Unable to generate OTP"
+        });
+    }
+});
 
 app.post("/otp/verify", (req, res) => {
+    const { email, otp } = req.body;
 
-  const { email, otp } = req.body;
+    if (typeof email !== "string" || !email.trim() ||
+        typeof otp !== "string") {
+        return res.status(400).json({
+            success: false,
+            message: "Email and OTP are required"
+        });
+    }
 
-  if (!email || !otp) {
-    return res.status(400).json({
-      success: false,
-      message: "Email and OTP are required"
+    const key = email.trim().toLowerCase();
+    const saved = otpStore.get(key);
+
+    if (!saved) {
+        return res.status(400).json({
+            success: false,
+            message: "No OTP found"
+        });
+    }
+
+    if (Date.now() >= saved.expiresAt) {
+        otpStore.delete(key);
+
+        return res.status(400).json({
+            success: false,
+            expired: true,
+            message: "OTP expired"
+        });
+    }
+
+    if (otp !== saved.otp) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid OTP"
+        });
+    }
+
+    otpStore.delete(key);
+
+    res.json({
+        success: true,
+        message: "OTP verified"
     });
-  }
-
-  const savedOtp =
-    otpStore.get(email.toLowerCase());
-
-  if (!savedOtp) {
-    return res.status(400).json({
-      success: false,
-      message: "No OTP found"
-    });
-  }
-
-  // Check expiration
-  if (Date.now() > savedOtp.expiresAt) {
-
-    otpStore.delete(email.toLowerCase());
-
-    return res.status(400).json({
-      success: false,
-      expired: true,
-      message: "OTP expired"
-    });
-  }
-
-  // Check if OTP is correct
-  if (otp.toString() !== savedOtp.otp) {
-
-    return res.status(400).json({
-      success: false,
-      expired: false,
-      message: "Invalid OTP"
-    });
-  }
-
-  // OTP is correct, remove it so it can't be reused
-  otpStore.delete(email.toLowerCase());
-
-  return res.json({
-    success: true,
-    message: "OTP verified"
-  });
 });
 
+// CREATE DATABASE TABLE AND START SERVER
+async function startServer() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                full_name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
 
-// ===============================
-// START SERVER
-// ===============================
+        console.log("PostgreSQL connected successfully!");
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-});
+        app.listen(PORT, "0.0.0.0", () => {
+            console.log(`Server running on port ${PORT}`);
+        });
+
+    } catch (error) {
+        console.error("Database connection failed:", error.message);
+        process.exit(1);
+    }
+}
+
+startServer();
