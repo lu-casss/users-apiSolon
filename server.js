@@ -47,7 +47,10 @@ app.get("/users", async (req, res) => {
 
     } catch (error) {
 
-        console.error("Users error:", error.message);
+        console.error(
+            "Users error:",
+            error.message
+        );
 
         res.status(500).json({
             success: false,
@@ -84,8 +87,12 @@ app.post("/signup", async (req, res) => {
             });
         }
 
-        const first = firstName.trim();
-        const last = lastName.trim();
+        const first =
+                firstName.trim();
+
+        const last =
+                lastName.trim();
+
         const normalizedEmail =
                 email.trim().toLowerCase();
 
@@ -112,6 +119,7 @@ app.post("/signup", async (req, res) => {
         }
 
         if (password.length < 6) {
+
             return res.status(400).json({
                 success: false,
                 message:
@@ -120,7 +128,10 @@ app.post("/signup", async (req, res) => {
         }
 
         const passwordHash =
-                await bcrypt.hash(password, 10);
+                await bcrypt.hash(
+                    password,
+                    10
+                );
 
         const fullName =
                 first + " " + last;
@@ -146,7 +157,8 @@ app.post("/signup", async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Account created successfully!"
+            message:
+                    "Account created successfully!"
         });
 
     } catch (error) {
@@ -166,7 +178,8 @@ app.post("/signup", async (req, res) => {
 
         res.status(500).json({
             success: false,
-            message: "Unable to create account"
+            message:
+                    "Unable to create account"
         });
     }
 });
@@ -180,7 +193,10 @@ app.post("/login", async (req, res) => {
 
     try {
 
-        const { email, password } = req.body;
+        const {
+            email,
+            password
+        } = req.body;
 
         if (
             typeof email !== "string" ||
@@ -196,20 +212,23 @@ app.post("/login", async (req, res) => {
         const normalizedEmail =
                 email.trim().toLowerCase();
 
-        const result = await pool.query(
-            "SELECT * FROM users WHERE email = $1",
-            [normalizedEmail]
-        );
+        const result =
+                await pool.query(
+                    "SELECT * FROM users WHERE email = $1",
+                    [normalizedEmail]
+                );
 
         if (result.rows.length === 0) {
 
             return res.status(401).json({
                 success: false,
-                message: "Invalid email or password"
+                message:
+                        "Invalid email or password"
             });
         }
 
-        const user = result.rows[0];
+        const user =
+                result.rows[0];
 
         const passwordCorrect =
                 await bcrypt.compare(
@@ -221,7 +240,8 @@ app.post("/login", async (req, res) => {
 
             return res.status(401).json({
                 success: false,
-                message: "Invalid email or password"
+                message:
+                        "Invalid email or password"
             });
         }
 
@@ -271,10 +291,11 @@ app.post("/otp/request", async (req, res) => {
         const normalizedEmail =
                 email.trim().toLowerCase();
 
-        const result = await pool.query(
-            "SELECT id FROM users WHERE email = $1",
-            [normalizedEmail]
-        );
+        const result =
+                await pool.query(
+                    "SELECT id FROM users WHERE email = $1",
+                    [normalizedEmail]
+                );
 
         if (result.rows.length === 0) {
 
@@ -313,7 +334,8 @@ app.post("/otp/request", async (req, res) => {
 
         res.status(500).json({
             success: false,
-            message: "Unable to generate OTP"
+            message:
+                    "Unable to generate OTP"
         });
     }
 });
@@ -321,7 +343,10 @@ app.post("/otp/request", async (req, res) => {
 
 app.post("/otp/verify", (req, res) => {
 
-    const { email, otp } = req.body;
+    const {
+        email,
+        otp
+    } = req.body;
 
     if (
         typeof email !== "string" ||
@@ -330,7 +355,8 @@ app.post("/otp/verify", (req, res) => {
     ) {
         return res.status(400).json({
             success: false,
-            message: "Email and OTP are required"
+            message:
+                    "Email and OTP are required"
         });
     }
 
@@ -384,15 +410,18 @@ async function startServer() {
 
     try {
 
-        // Creates the table for a fresh database
+        // Create table for a fresh database
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
+
                 id INTEGER
                     GENERATED ALWAYS AS IDENTITY
                     PRIMARY KEY,
 
                 first_name TEXT,
+
                 last_name TEXT,
+
                 full_name TEXT NOT NULL,
 
                 email TEXT NOT NULL UNIQUE,
@@ -406,18 +435,22 @@ async function startServer() {
             )
         `);
 
-        // Upgrade the existing table
+
+        // Add first_name if upgrading an old database
         await pool.query(`
             ALTER TABLE users
             ADD COLUMN IF NOT EXISTS
             first_name TEXT
         `);
 
+
+        // Add last_name if upgrading an old database
         await pool.query(`
             ALTER TABLE users
             ADD COLUMN IF NOT EXISTS
             last_name TEXT
         `);
+
 
         // Username is no longer required
         await pool.query(`
@@ -425,9 +458,96 @@ async function startServer() {
             ALTER COLUMN username DROP NOT NULL
         `);
 
+
+        // =============================
+        // MIGRATE ORIGINAL USERS
+        // =============================
+
+        const oldUsers = [
+
+            {
+                firstName: "Lucas",
+                lastName: "Solon",
+                email: "Lucas@email.com",
+                password: "12345"
+            },
+
+            {
+                firstName: "namename",
+                lastName: "name",
+                email: "name@email.com",
+                password: "nameemail1"
+            },
+
+            {
+                firstName: "lastemail",
+                lastName: "email",
+                email: "email@name.com",
+                password: "2444123"
+            }
+        ];
+
+
+        for (const oldUser of oldUsers) {
+
+            const normalizedEmail =
+                    oldUser.email
+                            .trim()
+                            .toLowerCase();
+
+            // Check first so users are not duplicated
+            // every time Render redeploys
+            const existing =
+                    await pool.query(
+                        `SELECT id
+                         FROM users
+                         WHERE email = $1`,
+                        [normalizedEmail]
+                    );
+
+            if (existing.rows.length === 0) {
+
+                const passwordHash =
+                        await bcrypt.hash(
+                            oldUser.password,
+                            10
+                        );
+
+                const fullName =
+                        oldUser.firstName +
+                        " " +
+                        oldUser.lastName;
+
+                await pool.query(
+                    `INSERT INTO users
+                    (
+                        first_name,
+                        last_name,
+                        full_name,
+                        email,
+                        password_hash
+                    )
+                    VALUES ($1, $2, $3, $4, $5)`,
+                    [
+                        oldUser.firstName,
+                        oldUser.lastName,
+                        fullName,
+                        normalizedEmail,
+                        passwordHash
+                    ]
+                );
+
+                console.log(
+                    `Migrated old user: ${normalizedEmail}`
+                );
+            }
+        }
+
+
         console.log(
             "PostgreSQL connected successfully!"
         );
+
 
         app.listen(
             PORT,
@@ -450,5 +570,6 @@ async function startServer() {
         process.exit(1);
     }
 }
+
 
 startServer();
