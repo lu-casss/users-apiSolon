@@ -8,28 +8,28 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// PostgreSQL connection
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL
 });
 
-// Keep Render OTP system for future activities
 const otpStore = new Map();
 
-// HOME
 app.get("/", (req, res) => {
     res.send("Users API is running!");
 });
 
-// GET USERS (without passwords)
+// USERS LIST
 app.get("/users", async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT id, full_name, email, username FROM users ORDER BY id"
+            "SELECT id, full_name, email FROM users ORDER BY id"
         );
 
         res.json(result.rows);
+
     } catch (error) {
+        console.error("Users error:", error.message);
+
         res.status(500).json({
             success: false,
             message: "Database error"
@@ -40,12 +40,11 @@ app.get("/users", async (req, res) => {
 // SIGN UP
 app.post("/signup", async (req, res) => {
     try {
-        const { fullName, email, username, password } = req.body;
+        const { fullName, email, password } = req.body;
 
         if (
             typeof fullName !== "string" ||
             typeof email !== "string" ||
-            typeof username !== "string" ||
             typeof password !== "string"
         ) {
             return res.status(400).json({
@@ -55,10 +54,10 @@ app.post("/signup", async (req, res) => {
         }
 
         const name = fullName.trim();
-        const normalizedEmail = email.trim().toLowerCase();
-        const normalizedUsername = username.trim();
+        const normalizedEmail =
+            email.trim().toLowerCase();
 
-        if (!name || !normalizedEmail || !normalizedUsername) {
+        if (!name || !normalizedEmail || !password) {
             return res.status(400).json({
                 success: false,
                 message: "All fields are required"
@@ -79,13 +78,18 @@ app.post("/signup", async (req, res) => {
             });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword =
+            await bcrypt.hash(password, 10);
 
         await pool.query(
             `INSERT INTO users
-             (full_name, email, username, password_hash)
-             VALUES ($1, $2, $3, $4)`,
-            [name, normalizedEmail, normalizedUsername, hashedPassword]
+             (full_name, email, password_hash)
+             VALUES ($1, $2, $3)`,
+            [
+                name,
+                normalizedEmail,
+                hashedPassword
+            ]
         );
 
         res.status(201).json({
@@ -94,10 +98,11 @@ app.post("/signup", async (req, res) => {
         });
 
     } catch (error) {
+
         if (error.code === "23505") {
             return res.status(409).json({
                 success: false,
-                message: "Email or username already exists"
+                message: "Email already exists"
             });
         }
 
@@ -115,17 +120,22 @@ app.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        if (typeof email !== "string" ||
-            typeof password !== "string") {
+        if (
+            typeof email !== "string" ||
+            typeof password !== "string"
+        ) {
             return res.status(400).json({
                 success: false,
                 message: "Email and password are required"
             });
         }
 
+        const normalizedEmail =
+            email.trim().toLowerCase();
+
         const result = await pool.query(
             "SELECT * FROM users WHERE email = $1",
-            [email.trim().toLowerCase()]
+            [normalizedEmail]
         );
 
         if (result.rows.length === 0) {
@@ -137,10 +147,11 @@ app.post("/login", async (req, res) => {
 
         const user = result.rows[0];
 
-        const validPassword = await bcrypt.compare(
-            password,
-            user.password_hash
-        );
+        const validPassword =
+            await bcrypt.compare(
+                password,
+                user.password_hash
+            );
 
         if (!validPassword) {
             return res.status(401).json({
@@ -157,6 +168,7 @@ app.post("/login", async (req, res) => {
         });
 
     } catch (error) {
+
         console.error("Login error:", error.message);
 
         res.status(500).json({
@@ -166,7 +178,7 @@ app.post("/login", async (req, res) => {
     }
 });
 
-// RENDER OTP - RESERVED FOR FUTURE ACTIVITY
+// RENDER OTP - SAVED FOR FUTURE ACTIVITY
 app.post("/otp/request", async (req, res) => {
     try {
         const { email } = req.body;
@@ -178,7 +190,8 @@ app.post("/otp/request", async (req, res) => {
             });
         }
 
-        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedEmail =
+            email.trim().toLowerCase();
 
         const result = await pool.query(
             "SELECT id FROM users WHERE email = $1",
@@ -192,14 +205,17 @@ app.post("/otp/request", async (req, res) => {
             });
         }
 
-        const otp = crypto.randomInt(1000, 10000).toString();
+        const otp =
+            crypto.randomInt(1000, 10000).toString();
 
         otpStore.set(normalizedEmail, {
-            otp,
+            otp: otp,
             expiresAt: Date.now() + 30000
         });
 
-        console.log(`OTP for ${normalizedEmail}: ${otp}`);
+        console.log(
+            `OTP for ${normalizedEmail}: ${otp}`
+        );
 
         res.json({
             success: true,
@@ -208,6 +224,7 @@ app.post("/otp/request", async (req, res) => {
         });
 
     } catch (error) {
+
         res.status(500).json({
             success: false,
             message: "Unable to generate OTP"
@@ -216,18 +233,25 @@ app.post("/otp/request", async (req, res) => {
 });
 
 app.post("/otp/verify", (req, res) => {
+
     const { email, otp } = req.body;
 
-    if (typeof email !== "string" || !email.trim() ||
-        typeof otp !== "string") {
+    if (
+        typeof email !== "string" ||
+        !email.trim() ||
+        typeof otp !== "string"
+    ) {
         return res.status(400).json({
             success: false,
             message: "Email and OTP are required"
         });
     }
 
-    const key = email.trim().toLowerCase();
-    const saved = otpStore.get(key);
+    const key =
+        email.trim().toLowerCase();
+
+    const saved =
+        otpStore.get(key);
 
     if (!saved) {
         return res.status(400).json({
@@ -237,6 +261,7 @@ app.post("/otp/verify", (req, res) => {
     }
 
     if (Date.now() >= saved.expiresAt) {
+
         otpStore.delete(key);
 
         return res.status(400).json({
@@ -261,28 +286,46 @@ app.post("/otp/verify", (req, res) => {
     });
 });
 
-// CREATE DATABASE TABLE AND START SERVER
+// DATABASE SETUP
 async function startServer() {
+
     try {
+
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 full_name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
-                username TEXT NOT NULL UNIQUE,
+                username TEXT UNIQUE,
                 password_hash TEXT NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         `);
 
-        console.log("PostgreSQL connected successfully!");
+        // Existing table originally required username.
+        // Make username optional for the updated activity.
+        await pool.query(`
+            ALTER TABLE users
+            ALTER COLUMN username DROP NOT NULL
+        `);
+
+        console.log(
+            "PostgreSQL connected successfully!"
+        );
 
         app.listen(PORT, "0.0.0.0", () => {
-            console.log(`Server running on port ${PORT}`);
+            console.log(
+                `Server running on port ${PORT}`
+            );
         });
 
     } catch (error) {
-        console.error("Database connection failed:", error.message);
+
+        console.error(
+            "Database connection failed:",
+            error.message
+        );
+
         process.exit(1);
     }
 }
